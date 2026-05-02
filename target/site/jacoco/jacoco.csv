@@ -1,0 +1,17 @@
+GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED
+GhostDeploy Starter,com.ghostdeploy.model,EndpointStats,2,77,1,1,0,16,1,4,0,4
+GhostDeploy Starter,com.ghostdeploy.model,FieldStats,0,58,1,3,0,14,1,4,0,3
+GhostDeploy Starter,com.ghostdeploy.model,AnomalyAlertEntity,0,21,0,0,0,9,0,1,0,1
+GhostDeploy Starter,com.ghostdeploy.config,GhostDeployProperties,12,149,0,0,3,42,3,24,3,24
+GhostDeploy Starter,com.ghostdeploy.config,GhostDeployProperties.Threshold,7,66,0,0,2,20,2,13,2,13
+GhostDeploy Starter,com.ghostdeploy.config,GhostDeployProperties.Async,0,13,0,0,0,4,0,3,0,3
+GhostDeploy Starter,com.ghostdeploy.config,GhostDeployProperties.Contracts,0,13,0,0,0,4,0,3,0,3
+GhostDeploy Starter,com.ghostdeploy.interceptor,GhostInterceptor,0,193,3,37,0,46,3,22,0,5
+GhostDeploy Starter,com.ghostdeploy.interceptor,GhostDeployFilter,0,49,0,8,0,14,0,6,0,2
+GhostDeploy Starter,com.ghostdeploy.engine,BaselineService,22,835,6,58,6,166,8,53,2,26
+GhostDeploy Starter,com.ghostdeploy.engine,AnomalyDetector,1,481,5,41,1,81,5,25,0,7
+GhostDeploy Starter,com.ghostdeploy.engine,BaselineService.new TypeReference() {...},0,6,0,0,0,1,0,1,0,1
+GhostDeploy Starter,com.ghostdeploy.engine,ContractExporter,0,145,0,6,0,25,0,4,0,1
+GhostDeploy Starter,com.ghostdeploy.autoconfigure,GhostDeployAutoConfiguration,0,82,0,0,0,23,0,5,0,5
+GhostDeploy Starter,com.ghostdeploy.controller,ContractController,1,99,1,7,1,19,1,4,0,1
+GhostDeploy Starter,com.ghostdeploy.alerting,DefaultAlertHandler,0,39,0,0,0,13,0,2,0,2

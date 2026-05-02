@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GhostInterceptor.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">GhostDeploy Starter</a> &gt; <a href="index.source.html" class="el_package">com.ghostdeploy.interceptor</a> &gt; <span class="el_source">GhostInterceptor.java</span></div><h1>GhostInterceptor.java</h1><pre class="source lang-java linenums">package com.ghostdeploy.interceptor;
+
+import com.ghostdeploy.config.GhostDeployProperties;
+import com.ghostdeploy.engine.BaselineService;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationContext;
+import org.springframework.core.env.Environment;
+import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.util.ContentCachingResponseWrapper;
+
+import java.util.concurrent.ThreadLocalRandom;
+
+@Component
+@RequiredArgsConstructor
+public class GhostInterceptor implements HandlerInterceptor {
+
+<span class="fc" id="L22">    private static final Logger log = LoggerFactory.getLogger(GhostInterceptor.class);</span>
+
+    private final BaselineService baselineService;
+    private final GhostDeployProperties properties;
+    private final Environment environment;
+    private final ApplicationContext applicationContext;
+
+    private static final String START_TIME_ATTR = &quot;GhostDeployStartTime&quot;;
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+<span class="fc bfc" id="L33" title="All 4 branches covered.">        if (!properties.isEnabled() || isExcluded(request.getRequestURI())) {</span>
+<span class="fc" id="L34">            return true;</span>
+        }
+
+        // Sampling
+<span class="fc bfc" id="L38" title="All 2 branches covered.">        if (properties.getSamplingRate() &lt; 1.0) {</span>
+<span class="pc bpc" id="L39" title="1 of 2 branches missed.">            if (ThreadLocalRandom.current().nextDouble() &gt; properties.getSamplingRate()) {</span>
+<span class="fc" id="L40">                return true; // Skip profiling this request</span>
+            }
+        }
+
+<span class="fc" id="L44">        request.setAttribute(START_TIME_ATTR, System.currentTimeMillis());</span>
+<span class="fc" id="L45">        return true;</span>
+    }
+
+    @Override
+    public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
+<span class="fc bfc" id="L50" title="All 2 branches covered.">        if (!properties.isEnabled()) {</span>
+<span class="fc" id="L51">            return;</span>
+        }
+
+<span class="fc" id="L54">        Long startTime = (Long) request.getAttribute(START_TIME_ATTR);</span>
+<span class="fc bfc" id="L55" title="All 2 branches covered.">        if (startTime == null) {</span>
+<span class="fc" id="L56">            return; // Was skipped or excluded</span>
+        }
+
+<span class="fc" id="L59">        long responseTime = System.currentTimeMillis() - startTime;</span>
+<span class="fc" id="L60">        int status = response.getStatus();</span>
+<span class="fc" id="L61">        String uri = request.getRequestURI();</span>
+<span class="fc" id="L62">        String endpointKey = buildEndpointKey(uri);</span>
+
+<span class="fc" id="L64">        String contentType = response.getContentType();</span>
+<span class="fc bfc" id="L65" title="All 4 branches covered.">        if (contentType != null &amp;&amp; contentType.contains(&quot;application/json&quot;)) {</span>
+<span class="fc bfc" id="L66" title="All 2 branches covered.">            if (response instanceof ContentCachingResponseWrapper) {</span>
+<span class="fc" id="L67">                ContentCachingResponseWrapper wrapper = (ContentCachingResponseWrapper) response;</span>
+                
+<span class="fc" id="L69">                String encoding = wrapper.getHeader(&quot;Content-Encoding&quot;);</span>
+<span class="pc bpc" id="L70" title="1 of 4 branches missed.">                boolean isGzip = encoding != null &amp;&amp; encoding.contains(&quot;gzip&quot;);</span>
+
+<span class="fc" id="L72">                byte[] rawContent = wrapper.getContentAsByteArray();</span>
+                
+                // For non-gzip, we can check size here. For gzip, we check during decompression in async.
+<span class="fc bfc" id="L75" title="All 4 branches covered.">                if (!isGzip &amp;&amp; rawContent.length &gt; properties.getMaxBodySizeBytes()) {</span>
+<span class="fc" id="L76">                    log.debug(&quot;Response body size {} exceeds max. Skipping deep inspection.&quot;, rawContent.length);</span>
+<span class="fc" id="L77">                    baselineService.processRequestStatsOnly(endpointKey, responseTime, status);</span>
+<span class="fc" id="L78">                    return;</span>
+                }
+
+<span class="fc bfc" id="L81" title="All 2 branches covered.">                if (rawContent.length &gt; 0) {</span>
+                    // Pass copied raw data to async service
+<span class="fc" id="L83">                    baselineService.processRequest(endpointKey, responseTime, status, rawContent, isGzip);</span>
+                } else {
+<span class="fc" id="L85">                    baselineService.processRequestStatsOnly(endpointKey, responseTime, status);</span>
+                }
+<span class="fc" id="L87">            }</span>
+        } else {
+            // Not JSON, just record stats
+<span class="fc" id="L90">            baselineService.processRequestStatsOnly(endpointKey, responseTime, status);</span>
+        }
+<span class="fc" id="L92">    }</span>
+
+<span class="fc" id="L94">    private static final String FALLBACK_ID = java.util.UUID.randomUUID().toString();</span>
+
+    private String buildEndpointKey(String uri) {
+<span class="fc" id="L97">        String appName = environment.getProperty(&quot;spring.application.name&quot;);</span>
+<span class="fc bfc" id="L98" title="All 4 branches covered.">        if (appName == null || appName.isEmpty()) {</span>
+<span class="fc" id="L99">            appName = applicationContext.getId();</span>
+<span class="pc bpc" id="L100" title="1 of 4 branches missed.">            if (appName == null || appName.isEmpty()) {</span>
+<span class="fc" id="L101">                appName = FALLBACK_ID;</span>
+            }
+        }
+<span class="fc" id="L104">        return appName + &quot;:&quot; + uri;</span>
+    }
+
+    private boolean isExcluded(String uri) {
+<span class="fc bfc" id="L108" title="All 2 branches covered.">        for (String excluded : properties.getExcludePaths()) {</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">            if (uri.startsWith(excluded)) {</span>
+<span class="fc" id="L110">                return true;</span>
+            }
+<span class="fc" id="L112">        }</span>
+<span class="fc" id="L113">        return false;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.12.202403310830</span></div></body></html>

@@ -1,0 +1,315 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>BaselineService.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">GhostDeploy Starter</a> &gt; <a href="index.source.html" class="el_package">com.ghostdeploy.engine</a> &gt; <span class="el_source">BaselineService.java</span></div><h1>BaselineService.java</h1><pre class="source lang-java linenums">package com.ghostdeploy.engine;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ghostdeploy.config.GhostDeployProperties;
+import com.ghostdeploy.model.EndpointStats;
+import com.ghostdeploy.model.FieldDetail;
+import com.ghostdeploy.model.FieldStats;
+import com.ghostdeploy.model.StatsSnapshotEntity;
+import com.ghostdeploy.repository.StatsRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.zip.GZIPInputStream;
+
+@Service
+@RequiredArgsConstructor
+public class BaselineService {
+
+<span class="fc" id="L36">    private static final Logger log = LoggerFactory.getLogger(BaselineService.class);</span>
+
+    private final Map&lt;String, EndpointStats&gt; memoryStats = new ConcurrentHashMap&lt;&gt;();
+    private final StatsRepository statsRepository;
+    private final AnomalyDetector anomalyDetector;
+    private final ObjectMapper objectMapper;
+    private final GhostDeployProperties properties;
+    private final MeterRegistry meterRegistry;
+
+<span class="fc" id="L45">    private static final Pattern UUID_OR_NUMERIC_PATTERN = Pattern.compile(&quot;^[0-9]+$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$&quot;);</span>
+
+    public Map&lt;String, EndpointStats&gt; getMemoryStats() {
+<span class="fc" id="L48">        return memoryStats;</span>
+    }
+
+    @PostConstruct
+    public void init() {
+<span class="fc" id="L53">        meterRegistry.gauge(&quot;ghostdeploy.endpoints.tracked&quot;, memoryStats, Map::size);</span>
+
+        try {
+<span class="fc" id="L56">            statsRepository.findAll().forEach(entity -&gt; {</span>
+<span class="fc" id="L57">                EndpointStats stats = new EndpointStats(entity.getEndpointKey());</span>
+<span class="fc" id="L58">                stats.getTotalRequestCount().set(entity.getTotalRequestCount());</span>
+<span class="fc" id="L59">                stats.getCumulativeResponseTime().set((long) (entity.getTotalRequestCount() * entity.getAverageResponseTime()));</span>
+                
+                try {
+<span class="fc" id="L62">                    Map&lt;String, Long&gt; fieldCounts = objectMapper.readValue(entity.getFieldStatsJson(), new TypeReference&lt;Map&lt;String, Long&gt;&gt;() {});</span>
+<span class="fc" id="L63">                    fieldCounts.forEach((field, count) -&gt; {</span>
+<span class="fc" id="L64">                        FieldStats fs = new FieldStats(field);</span>
+<span class="fc" id="L65">                        fs.getPresenceCount().set(count);</span>
+<span class="fc" id="L66">                        stats.getFieldStatsMap().put(field, fs);</span>
+<span class="fc" id="L67">                    });</span>
+<span class="fc" id="L68">                } catch (JsonProcessingException e) {</span>
+<span class="fc" id="L69">                    log.error(&quot;Failed to parse field stats JSON for endpoint {}&quot;, entity.getEndpointKey(), e);</span>
+<span class="fc" id="L70">                }</span>
+                
+<span class="fc" id="L72">                memoryStats.put(entity.getEndpointKey(), stats);</span>
+<span class="fc" id="L73">            });</span>
+<span class="fc" id="L74">            log.info(&quot;GhostDeploy BaselineService initialized with {} endpoints from database.&quot;, memoryStats.size());</span>
+<span class="fc" id="L75">        } catch (Exception e) {</span>
+<span class="fc" id="L76">            log.warn(&quot;Failed to load Baseline stats from DB. Starting fresh.&quot;, e);</span>
+<span class="fc" id="L77">        }</span>
+<span class="fc" id="L78">    }</span>
+
+    @PreDestroy
+    public void shutdown() {
+<span class="nc" id="L82">        persistSnapshots();</span>
+<span class="nc" id="L83">    }</span>
+
+    @Async(&quot;ghostDeployTaskExecutor&quot;)
+    public void processRequestStatsOnly(String endpointKey, long responseTime, int statusCode) {
+<span class="fc" id="L87">        processInternal(endpointKey, responseTime, statusCode, Collections.emptyList());</span>
+<span class="fc" id="L88">    }</span>
+
+    @Async(&quot;ghostDeployTaskExecutor&quot;)
+    public void processRequest(String endpointKey, long responseTime, int statusCode, byte[] payload, boolean isGzip) {
+<span class="fc" id="L92">        List&lt;FieldDetail&gt; extractedFields = Collections.emptyList();</span>
+        try {
+<span class="fc" id="L94">            byte[] decompressed = payload;</span>
+<span class="fc bfc" id="L95" title="All 2 branches covered.">            if (isGzip) {</span>
+<span class="fc" id="L96">                decompressed = decompressGzip(payload, properties.getMaxBodySizeBytes());</span>
+<span class="fc bfc" id="L97" title="All 2 branches covered.">                if (decompressed == null) {</span>
+                    // Exceeded max size during decompression
+<span class="fc" id="L99">                    log.debug(&quot;GZIP payload exceeded max body size for {}. Proceeding without field extraction.&quot;, endpointKey);</span>
+<span class="fc" id="L100">                    processInternal(endpointKey, responseTime, statusCode, Collections.emptyList());</span>
+<span class="fc" id="L101">                    return;</span>
+                }
+            }
+
+<span class="fc bfc" id="L105" title="All 2 branches covered.">            if (decompressed.length &gt; 0) {</span>
+<span class="fc" id="L106">                JsonNode rootNode = objectMapper.readTree(decompressed);</span>
+<span class="fc" id="L107">                extractedFields = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L108">                extractFields(rootNode, &quot;&quot;, extractedFields);</span>
+            }
+<span class="fc" id="L110">        } catch (Exception e) {</span>
+<span class="fc" id="L111">            log.debug(&quot;Failed to process payload for endpoint {}&quot;, endpointKey, e);</span>
+<span class="fc" id="L112">        }</span>
+
+<span class="fc" id="L114">        processInternal(endpointKey, responseTime, statusCode, extractedFields);</span>
+<span class="fc" id="L115">    }</span>
+
+    private byte[] decompressGzip(byte[] compressed, int maxBytes) throws IOException {
+<span class="fc" id="L118">        try (ByteArrayInputStream bais = new ByteArrayInputStream(compressed);</span>
+<span class="fc" id="L119">             GZIPInputStream gis = new GZIPInputStream(bais);</span>
+<span class="fc" id="L120">             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {</span>
+            
+<span class="fc" id="L122">            byte[] buffer = new byte[1024];</span>
+            int len;
+<span class="fc" id="L124">            int total = 0;</span>
+<span class="fc bfc" id="L125" title="All 2 branches covered.">            while ((len = gis.read(buffer)) &gt; 0) {</span>
+<span class="fc" id="L126">                total += len;</span>
+<span class="fc bfc" id="L127" title="All 2 branches covered.">                if (total &gt; maxBytes) {</span>
+<span class="fc" id="L128">                    return null; // Exceeded limit</span>
+                }
+<span class="fc" id="L130">                baos.write(buffer, 0, len);</span>
+            }
+<span class="fc" id="L132">            return baos.toByteArray();</span>
+<span class="fc" id="L133">        }</span>
+    }
+
+    private void processInternal(String endpointKey, long responseTime, int statusCode, List&lt;FieldDetail&gt; extractedFields) {
+<span class="fc" id="L137">        meterRegistry.counter(&quot;ghostdeploy.requests.processed&quot;, &quot;endpoint&quot;, endpointKey).increment();</span>
+
+        // Evict if max endpoints reached
+<span class="pc bpc" id="L140" title="1 of 4 branches missed.">        if (memoryStats.size() &gt;= properties.getMaxEndpointsTracked() &amp;&amp; !memoryStats.containsKey(endpointKey)) {</span>
+<span class="fc" id="L141">            evictOldestEndpoint();</span>
+        }
+
+<span class="fc" id="L144">        EndpointStats stats = memoryStats.computeIfAbsent(endpointKey, EndpointStats::new);</span>
+        
+<span class="fc bfc" id="L146" title="All 2 branches covered.">        if (!extractedFields.isEmpty()) {</span>
+<span class="fc" id="L147">            updateSchemaFingerprint(stats, extractedFields);</span>
+<span class="fc" id="L148">            anomalyDetector.detectAnomalies(stats, extractedFields, responseTime, statusCode);</span>
+        }
+
+<span class="fc" id="L151">        stats.incrementRequest(responseTime, statusCode);</span>
+        
+<span class="fc bfc" id="L153" title="All 2 branches covered.">        for (FieldDetail detail : extractedFields) {</span>
+<span class="pc bpc" id="L154" title="1 of 4 branches missed.">            if (stats.getFieldStatsMap().size() &gt;= properties.getMaxFieldsPerEndpoint() &amp;&amp; !stats.getFieldStatsMap().containsKey(detail.getFieldName())) {</span>
+<span class="fc" id="L155">                evictOldestField(stats);</span>
+<span class="pc bpc" id="L156" title="1 of 2 branches missed.">                if (stats.getFieldStatsMap().size() &gt;= properties.getMaxFieldsPerEndpoint()) {</span>
+<span class="nc" id="L157">                    continue; // Skip if still full</span>
+                }
+            }
+<span class="fc" id="L160">            stats.getFieldStatsMap()</span>
+<span class="fc" id="L161">                    .computeIfAbsent(detail.getFieldName(), k -&gt; new FieldStats(detail.getFieldName()))</span>
+<span class="fc" id="L162">                    .record(detail);</span>
+<span class="fc" id="L163">        }</span>
+<span class="fc" id="L164">    }</span>
+
+    private void updateSchemaFingerprint(EndpointStats stats, List&lt;FieldDetail&gt; extractedFields) {
+        // Canonical sorted representation of field paths and types
+<span class="fc" id="L168">        String currentFingerprint = extractedFields.stream()</span>
+<span class="fc" id="L169">                .map(f -&gt; f.getFieldName() + &quot;:&quot; + f.getType())</span>
+<span class="fc" id="L170">                .sorted()</span>
+<span class="fc" id="L171">                .collect(Collectors.joining(&quot;|&quot;));</span>
+        
+        // Fast non-cryptographic hash (MurmurHash3 32-bit equivalent)
+<span class="fc" id="L174">        int hash = murmurHash3_x86_32(currentFingerprint.getBytes(java.nio.charset.StandardCharsets.UTF_8), 0, currentFingerprint.length(), 0x9747b28c);</span>
+<span class="fc" id="L175">        String hashHex = Integer.toHexString(hash);</span>
+        
+<span class="fc bfc" id="L177" title="All 2 branches covered.">        if (!hashHex.equals(stats.getSchemaFingerprint())) {</span>
+<span class="fc" id="L178">            stats.setSchemaFingerprint(hashHex);</span>
+        }
+<span class="fc" id="L180">    }</span>
+
+    private static int murmurHash3_x86_32(byte[] data, int offset, int len, int seed) {
+<span class="fc" id="L183">        int c1 = 0xcc9e2d51;</span>
+<span class="fc" id="L184">        int c2 = 0x1b873593;</span>
+
+<span class="fc" id="L186">        int h1 = seed;</span>
+<span class="fc" id="L187">        int roundedEnd = offset + (len &amp; 0xfffffffc);  // round down to 4 byte block</span>
+
+<span class="fc bfc" id="L189" title="All 2 branches covered.">        for (int i = offset; i &lt; roundedEnd; i += 4) {</span>
+            // little endian load order
+<span class="fc" id="L191">            int k1 = (data[i] &amp; 0xff) | ((data[i + 1] &amp; 0xff) &lt;&lt; 8) | ((data[i + 2] &amp; 0xff) &lt;&lt; 16) | (data[i + 3] &lt;&lt; 24);</span>
+<span class="fc" id="L192">            k1 *= c1;</span>
+<span class="fc" id="L193">            k1 = (k1 &lt;&lt; 15) | (k1 &gt;&gt;&gt; 17);  // ROTL32(k1,15);</span>
+<span class="fc" id="L194">            k1 *= c2;</span>
+
+<span class="fc" id="L196">            h1 ^= k1;</span>
+<span class="fc" id="L197">            h1 = (h1 &lt;&lt; 13) | (h1 &gt;&gt;&gt; 19);  // ROTL32(h1,13);</span>
+<span class="fc" id="L198">            h1 = h1 * 5 + 0xe6546b64;</span>
+        }
+
+<span class="fc" id="L201">        int k1 = 0;</span>
+<span class="fc bfc" id="L202" title="All 4 branches covered.">        switch(len &amp; 0x03) {</span>
+            case 3:
+<span class="fc" id="L204">                k1 = (data[roundedEnd + 2] &amp; 0xff) &lt;&lt; 16;</span>
+                // fallthrough
+            case 2:
+<span class="fc" id="L207">                k1 |= (data[roundedEnd + 1] &amp; 0xff) &lt;&lt; 8;</span>
+                // fallthrough
+            case 1:
+<span class="fc" id="L210">                k1 |= (data[roundedEnd] &amp; 0xff);</span>
+<span class="fc" id="L211">                k1 *= c1;</span>
+<span class="fc" id="L212">                k1 = (k1 &lt;&lt; 15) | (k1 &gt;&gt;&gt; 17);  // ROTL32(k1,15);</span>
+<span class="fc" id="L213">                k1 *= c2;</span>
+<span class="fc" id="L214">                h1 ^= k1;</span>
+        }
+
+<span class="fc" id="L217">        h1 ^= len;</span>
+<span class="fc" id="L218">        h1 ^= h1 &gt;&gt;&gt; 16;</span>
+<span class="fc" id="L219">        h1 *= 0x85ebca6b;</span>
+<span class="fc" id="L220">        h1 ^= h1 &gt;&gt;&gt; 13;</span>
+<span class="fc" id="L221">        h1 *= 0xc2b2ae35;</span>
+<span class="fc" id="L222">        h1 ^= h1 &gt;&gt;&gt; 16;</span>
+
+<span class="fc" id="L224">        return h1;</span>
+    }
+
+    @Scheduled(fixedRateString = &quot;300000&quot;) // Every 5 minutes
+    public void scheduledTtlSweeper() {
+<span class="fc" id="L229">        long currentTime = System.currentTimeMillis();</span>
+<span class="fc" id="L230">        long endpointTtlMillis = properties.getEndpointTtlMinutes() * 60 * 1000L;</span>
+<span class="fc" id="L231">        long fieldTtlMillis = properties.getFieldTtlMinutes() * 60 * 1000L;</span>
+
+<span class="fc bfc" id="L233" title="All 2 branches covered.">        memoryStats.entrySet().removeIf(entry -&gt; (currentTime - entry.getValue().getLastAccessedTimeMillis()) &gt; endpointTtlMillis);</span>
+
+<span class="fc bfc" id="L235" title="All 2 branches covered.">        for (EndpointStats stats : memoryStats.values()) {</span>
+<span class="pc bpc" id="L236" title="1 of 2 branches missed.">            stats.getFieldStatsMap().entrySet().removeIf(entry -&gt; (currentTime - entry.getValue().getLastAccessedTimeMillis()) &gt; fieldTtlMillis);</span>
+<span class="fc" id="L237">        }</span>
+<span class="fc" id="L238">    }</span>
+
+    private void evictOldestEndpoint() {
+<span class="fc" id="L241">        memoryStats.entrySet().stream()</span>
+<span class="fc" id="L242">                .min(Comparator.comparingLong(e -&gt; e.getValue().getLastAccessedTimeMillis()))</span>
+<span class="fc" id="L243">                .ifPresent(e -&gt; memoryStats.remove(e.getKey()));</span>
+<span class="fc" id="L244">    }</span>
+
+    private void evictOldestField(EndpointStats stats) {
+<span class="fc" id="L247">        stats.getFieldStatsMap().entrySet().stream()</span>
+<span class="fc" id="L248">                .min(Comparator.comparingLong(e -&gt; e.getValue().getLastAccessedTimeMillis()))</span>
+<span class="fc" id="L249">                .ifPresent(e -&gt; stats.getFieldStatsMap().remove(e.getKey()));</span>
+<span class="fc" id="L250">    }</span>
+
+    private void extractFields(JsonNode node, String prefix, List&lt;FieldDetail&gt; fields) {
+<span class="fc bfc" id="L253" title="All 2 branches covered.">        if (node.isObject()) {</span>
+<span class="fc" id="L254">            Iterator&lt;Map.Entry&lt;String, JsonNode&gt;&gt; fieldsIterator = node.fields();</span>
+<span class="fc bfc" id="L255" title="All 2 branches covered.">            while (fieldsIterator.hasNext()) {</span>
+<span class="fc" id="L256">                Map.Entry&lt;String, JsonNode&gt; entry = fieldsIterator.next();</span>
+<span class="fc" id="L257">                String keySegment = entry.getKey();</span>
+                
+<span class="fc bfc" id="L259" title="All 2 branches covered.">                if (UUID_OR_NUMERIC_PATTERN.matcher(keySegment).matches()) {</span>
+<span class="fc" id="L260">                    keySegment = &quot;*&quot;;</span>
+                }
+                
+<span class="fc bfc" id="L263" title="All 2 branches covered.">                String key = prefix.isEmpty() ? keySegment : prefix + &quot;.&quot; + keySegment;</span>
+<span class="fc" id="L264">                JsonNode child = entry.getValue();</span>
+                
+<span class="fc" id="L266">                String type = determineType(child);</span>
+<span class="fc" id="L267">                boolean isNull = child.isNull();</span>
+                
+<span class="fc" id="L269">                fields.add(new FieldDetail(key, type, null, isNull));</span>
+<span class="fc" id="L270">                extractFields(child, key, fields);</span>
+<span class="fc" id="L271">            }</span>
+<span class="fc bfc" id="L272" title="All 2 branches covered.">        } else if (node.isArray()) {</span>
+<span class="fc" id="L273">            String arrayPrefix = prefix + &quot;[*]&quot;;</span>
+<span class="pc bpc" id="L274" title="1 of 2 branches missed.">            if (node.size() &gt; 0) {</span>
+<span class="fc" id="L275">                int elementsToInspect = Math.min(node.size(), 3);</span>
+<span class="fc bfc" id="L276" title="All 2 branches covered.">                for (int i = 0; i &lt; elementsToInspect; i++) {</span>
+<span class="fc" id="L277">                    extractFields(node.get(i), arrayPrefix, fields);</span>
+                }
+            }
+        }
+<span class="fc" id="L281">    }</span>
+
+    private String determineType(JsonNode node) {
+<span class="fc bfc" id="L284" title="All 2 branches covered.">        if (node.isTextual()) return &quot;STRING&quot;;</span>
+<span class="fc bfc" id="L285" title="All 2 branches covered.">        if (node.isNumber()) return &quot;NUMBER&quot;;</span>
+<span class="fc bfc" id="L286" title="All 2 branches covered.">        if (node.isBoolean()) return &quot;BOOLEAN&quot;;</span>
+<span class="fc bfc" id="L287" title="All 2 branches covered.">        if (node.isNull()) return &quot;NULL&quot;;</span>
+<span class="fc bfc" id="L288" title="All 2 branches covered.">        if (node.isArray()) return &quot;ARRAY&quot;;</span>
+<span class="pc bpc" id="L289" title="1 of 2 branches missed.">        if (node.isObject()) return &quot;OBJECT&quot;;</span>
+<span class="nc" id="L290">        return &quot;UNKNOWN&quot;;</span>
+    }
+
+    public void persistSnapshots() {
+<span class="fc" id="L294">        memoryStats.forEach((key, stats) -&gt; {</span>
+<span class="fc" id="L295">            StatsSnapshotEntity entity = statsRepository.findByEndpointKey(key)</span>
+<span class="fc" id="L296">                    .orElse(new StatsSnapshotEntity());</span>
+            
+<span class="fc" id="L298">            entity.setEndpointKey(key);</span>
+<span class="fc" id="L299">            entity.setTotalRequestCount(stats.getTotalRequestCount().get());</span>
+<span class="fc" id="L300">            entity.setAverageResponseTime(stats.getAverageResponseTime());</span>
+            
+<span class="fc" id="L302">            Map&lt;String, Long&gt; fieldCountMap = new ConcurrentHashMap&lt;&gt;();</span>
+<span class="pc" id="L303">            stats.getFieldStatsMap().forEach((k, v) -&gt; fieldCountMap.put(k, v.getPresenceCount().get()));</span>
+            
+            try {
+<span class="fc" id="L306">                entity.setFieldStatsJson(objectMapper.writeValueAsString(fieldCountMap));</span>
+<span class="fc" id="L307">                statsRepository.save(entity);</span>
+<span class="nc" id="L308">            } catch (JsonProcessingException e) {</span>
+<span class="nc" id="L309">                log.error(&quot;Failed to serialize field stats for endpoint {}&quot;, key, e);</span>
+<span class="fc" id="L310">            }</span>
+<span class="fc" id="L311">        });</span>
+<span class="fc" id="L312">        log.info(&quot;Persisted GhostDeploy snapshots to database.&quot;);</span>
+<span class="fc" id="L313">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.12.202403310830</span></div></body></html>

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ContractController.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">GhostDeploy Starter</a> &gt; <a href="index.source.html" class="el_package">com.ghostdeploy.controller</a> &gt; <span class="el_source">ContractController.java</span></div><h1>ContractController.java</h1><pre class="source lang-java linenums">package com.ghostdeploy.controller;
+
+import com.ghostdeploy.engine.BaselineService;
+import com.ghostdeploy.model.EndpointStats;
+import com.ghostdeploy.model.FieldStats;
+import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@RestController
+@RequestMapping(&quot;/ghostdeploy&quot;)
+@ConditionalOnProperty(prefix = &quot;ghostdeploy.contracts&quot;, name = &quot;enabled&quot;, havingValue = &quot;true&quot;, matchIfMissing = false)
+@RequiredArgsConstructor
+public class ContractController {
+
+    private final BaselineService baselineService;
+
+    @GetMapping(&quot;/contracts&quot;)
+    public Map&lt;String, Object&gt; getContracts() {
+<span class="fc" id="L25">        Map&lt;String, Object&gt; snapshot = new HashMap&lt;&gt;();</span>
+
+<span class="fc bfc" id="L27" title="All 2 branches covered.">        for (Map.Entry&lt;String, EndpointStats&gt; entry : baselineService.getMemoryStats().entrySet()) {</span>
+<span class="fc" id="L28">            String endpointKey = entry.getKey();</span>
+<span class="fc" id="L29">            EndpointStats stats = entry.getValue();</span>
+<span class="fc" id="L30">            long totalRequests = stats.getTotalRequestCount().get();</span>
+
+<span class="fc" id="L32">            Map&lt;String, Object&gt; fields = new HashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L33" title="All 2 branches covered.">            for (Map.Entry&lt;String, FieldStats&gt; fieldEntry : stats.getFieldStatsMap().entrySet()) {</span>
+<span class="fc" id="L34">                FieldStats fs = fieldEntry.getValue();</span>
+
+<span class="fc" id="L36">                long presenceCount = fs.getPresenceCount().get();</span>
+<span class="pc bpc" id="L37" title="1 of 4 branches missed.">                if (totalRequests == 0 || presenceCount == 0) {</span>
+<span class="nc" id="L38">                    continue;</span>
+                }
+
+<span class="fc" id="L41">                Map&lt;String, Object&gt; fieldDetails = new HashMap&lt;&gt;();</span>
+<span class="fc" id="L42">                double presenceRate = (double) presenceCount / totalRequests;</span>
+<span class="fc" id="L43">                fieldDetails.put(&quot;presenceRate&quot;, presenceRate);</span>
+<span class="fc" id="L44">                fieldDetails.put(&quot;types&quot;, fs.getTypeFrequency());</span>
+
+<span class="fc" id="L46">                fields.put(fieldEntry.getKey(), fieldDetails);</span>
+<span class="fc" id="L47">            }</span>
+<span class="fc" id="L48">            snapshot.put(endpointKey, fields);</span>
+<span class="fc" id="L49">        }</span>
+
+<span class="fc" id="L51">        return snapshot;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.12.202403310830</span></div></body></html>
