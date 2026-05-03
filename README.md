@@ -126,7 +126,7 @@ GhostDeploy works with zero configuration, but everything is tunable via `applic
 ```yaml
 ghostdeploy:
   enabled: true                    # Set to false to disable entirely (default: true)
-  sampling-rate: 0.5               # Only process 50% of requests (default: 1.0)
+  sampling-rate: 0.5               # Only process 50% of requests (default: 0.5)
   max-body-size-bytes: 10240       # Skip bodies larger than 10KB (default: 10240)
   warmup-requests: 200             # Don't alert until this many requests seen (default: 200)
   max-endpoints-tracked: 500       # LRU-evict oldest endpoints after this limit (default: 500)
@@ -135,14 +135,17 @@ ghostdeploy:
   field-ttl-minutes: 60            # Evict fields not seen in this window (default: 60)
   alert-debounce-minutes: 10       # Suppress duplicate alerts for this window (default: 10)
   exclude-paths:
-    - /actuator
     - /health
-    - /swagger-ui
+    - /actuator
+    - /error
+    - /ghostdeploy
 
   threshold:
     field-expected-presence: 0.90  # Alert on drop if field was present >90% historically (default: 0.90)
+    field-drop: 0.20               # Alert if drop rate crosses 20% (default: 0.20)
+    ignore-frequency: 0.10         # Ignore fields with frequency <10% (default: 0.10)
     type-drift-sensitivity: 0.20   # Alert if new type crosses 20% share (default: 0.20)
-    null-rate-spike: 0.05          # Alert if null appears but historical rate was <5% (default: 0.05)
+    null-rate-spike: 0.30          # Alert if null appears but historical rate was <30% (default: 0.30)
     min-samples: 30                # Minimum observations before a field is "trusted" (default: 30)
     min-presence-rate: 0.30        # Field must have appeared >30% of the time to be tracked (default: 0.30)
 
