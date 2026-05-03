@@ -1,1 +1,0 @@
-packageSearchIndex = [{"l":"All Packages","u":"allpackages-index.html"},{"l":"com.ghostdeploy.alerting"},{"l":"com.ghostdeploy.autoconfigure"},{"l":"com.ghostdeploy.config"},{"l":"com.ghostdeploy.controller"},{"l":"com.ghostdeploy.engine"},{"l":"com.ghostdeploy.interceptor"},{"l":"com.ghostdeploy.model"},{"l":"com.ghostdeploy.repository"}];updateSearchResults();
